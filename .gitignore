@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+api/local.settings.json
+api/node_modules
+api/dist
+.vscode
+*.log
