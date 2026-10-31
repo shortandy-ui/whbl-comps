@@ -42,30 +42,44 @@ function nextPow2(n) {
 }
 
 function generateBracket(entrants) {
-  const shuffled = shuffle(entrants);
-  const size = nextPow2(Math.max(shuffled.length, 2));
-  const byes = size - shuffled.length;
-  let slots = shuffle([...shuffled, ...Array(byes).fill(null)]);
-  const round1Count = size / 2;
-  const round1 = [];
-  for (let i = 0; i < round1Count; i++) {
-    const p1 = slots[2 * i];
-    const p2 = slots[2 * i + 1];
-    let winner = null;
-    if (p1 && !p2) winner = p1;
-    else if (!p1 && p2) winner = p2;
-    round1.push({ p1, p2, score1: null, score2: null, winner });
+  const list = shuffle(entrants);
+  const n = list.length;
+  const size = nextPow2(Math.max(n, 2));
+  const matchCount = size / 2;
+  const byes = size - n; // always less than matchCount
+
+  let pairs = [];
+  let idx = 0;
+  for (let i = 0; i < matchCount; i++) {
+    if (i < byes) {
+      pairs.push([list[idx++], null]);
+    } else {
+      const a = list[idx++];
+      const b = list[idx++];
+      pairs.push([a, b]);
+    }
   }
+  pairs = shuffle(pairs).map(([a, b]) => (Math.random() < 0.5 ? [b, a] : [a, b]));
+
+  const round1 = pairs.map(([p1, p2]) => ({
+    p1,
+    p2,
+    score1: null,
+    score2: null,
+    winner: p1 && !p2 ? p1 : !p1 && p2 ? p2 : null,
+  }));
+
   const rounds = [round1];
-  let count = round1Count / 2;
+  let count = matchCount / 2;
   while (count >= 1) {
     const r = [];
-    for (let i = 0; i < count; i++)
+    for (let i = 0; i < count; i++) {
       r.push({ p1: null, p2: null, score1: null, score2: null, winner: null });
+    }
     rounds.push(r);
     count /= 2;
   }
-  // propagate round-1 byes into round 2
+
   if (rounds.length > 1) {
     rounds[0].forEach((m, i) => {
       if (m.winner) {
@@ -74,6 +88,7 @@ function generateBracket(entrants) {
       }
     });
   }
+
   const roundMeta = rounds.map(() => ({ playBy: "", contact: "" }));
   return { rounds, roundMeta };
 }
@@ -231,8 +246,9 @@ export default function App() {
     const match = bracket[roundIdx][matchIdx];
     match.score1 = n1;
     match.score2 = n2;
+    const prevWinner = match.winner;
     match.winner = n1 > n2 ? match.p1 : match.p2;
-    if (roundIdx + 1 < bracket.length) {
+    if (roundIdx + 1 < bracket.length && prevWinner !== match.winner) {
       cascadeClear(bracket, roundIdx, matchIdx);
       const slot = matchIdx % 2 === 0 ? "p1" : "p2";
       bracket[roundIdx + 1][Math.floor(matchIdx / 2)][slot] = match.winner;
@@ -255,7 +271,6 @@ export default function App() {
     const next = { ...data };
     next[selected] = emptyTournament();
     await persist(next);
-    setEntrantText("");
     setResetConfirmText("");
     setShowResetBox(false);
   };
@@ -505,6 +520,7 @@ function Bracket({ rounds, roundMeta, isAdmin, onSubmitScore, onUpdateMeta }) {
           <MatchCard
             key={matchIdx}
             match={match}
+            firstRound={roundIdx === 0}
             onSubmit={(s1, s2) => onSubmitScore(roundIdx, matchIdx, s1, s2)}
           />
         ))}
@@ -552,10 +568,11 @@ function Bracket({ rounds, roundMeta, isAdmin, onSubmitScore, onUpdateMeta }) {
   );
 }
 
-function MatchCard({ match, onSubmit }) {
+function MatchCard({ match, onSubmit, firstRound = false }) {
   const [s1, setS1] = useState(match.score1 ?? "");
   const [s2, setS2] = useState(match.score2 ?? "");
-  const bye = (match.p1 && !match.p2) || (!match.p1 && match.p2);
+  // Only a first-round gap is a bye; later on it just means the opponent isn't known yet.
+  const bye = firstRound && ((match.p1 && !match.p2) || (!match.p1 && match.p2));
   const editable = match.p1 && match.p2 && !bye;
 
   useEffect(() => {
@@ -566,9 +583,9 @@ function MatchCard({ match, onSubmit }) {
   return (
     <div className="whbl-match" style={{ ...styles.matchCard, opacity: match.p1 || match.p2 ? 1 : 0.45 }}>
       <span className="whbl-jack" />
-      <PlayerRow name={match.p1} won={match.winner && match.winner === match.p1} score={s1} />
+      <PlayerRow name={match.p1} won={match.winner && match.winner === match.p1} trophy={!bye} score={s1} />
       <div style={styles.vsDivider} />
-      <PlayerRow name={match.p2} won={match.winner && match.winner === match.p2} score={s2} />
+      <PlayerRow name={match.p2} won={match.winner && match.winner === match.p2} trophy={!bye} score={s2} />
       {bye && <div style={styles.byeTag}>bye</div>}
       {editable && (
         <div style={styles.scoreRow}>
@@ -596,7 +613,7 @@ function MatchCard({ match, onSubmit }) {
   );
 }
 
-function PlayerRow({ name, won, score }) {
+function PlayerRow({ name, won, trophy, score }) {
   return (
     <div
       style={{
@@ -606,7 +623,7 @@ function PlayerRow({ name, won, score }) {
         borderBottom: won ? "2px solid #AC8347" : "2px solid transparent",
       }}
     >
-      <span>{won ? "🏆 " : ""}{name || "—"}</span>
+      <span>{won && trophy ? "🏆 " : ""}{name || "—"}</span>
       {name && score !== "" && score != null && <span style={styles.scoreDigit}>{score}</span>}
     </div>
   );
