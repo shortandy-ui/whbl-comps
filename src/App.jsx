@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { storageGet, storageSet } from "./api";
+import { storageGet, storageSet, login, adminInfo, setPassword } from "./api";
 
 const TOURNAMENT_NAMES = [
   "John Brown Trophy",
@@ -13,8 +13,25 @@ const TOURNAMENT_NAMES = [
 ];
 
 const STORAGE_KEY = "whbl-tournaments-v1";
-const PW_KEY = "whbl-admin-password-v1";
-const DEFAULT_PASSWORD = "bowlsadmin";
+// The players' password is remembered on each phone or computer under this name.
+const PLAYER_PW_KEY = "whbl-player-password";
+
+function rememberedPlayerPw() {
+  try {
+    return localStorage.getItem(PLAYER_PW_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function rememberPlayerPw(pw) {
+  try {
+    if (pw) localStorage.setItem(PLAYER_PW_KEY, pw);
+    else localStorage.removeItem(PLAYER_PW_KEY);
+  } catch {
+    // private window etc. — they'll just be asked again next time
+  }
+}
 
 function emptyTournament() {
   return { entrants: [], bracket: null, roundMeta: null };
@@ -123,7 +140,15 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [view, setView] = useState("home"); // home | tournament | admin
-  const [isAdmin, setIsAdmin] = useState(false);
+  // The admin's password is kept only while the page is open; the players' password is remembered on the device.
+  const [adminAuth, setAdminAuth] = useState(null);
+  const isAdmin = !!adminAuth;
+  const [playerPw, setPlayerPw] = useState(rememberedPlayerPw);
+  const [needPassword, setNeedPassword] = useState(false);
+  const [playerInput, setPlayerInput] = useState("");
+  const [playerError, setPlayerError] = useState("");
+  const [playersPwSet, setPlayersPwSet] = useState(null);
+  const [newPlayersPw, setNewPlayersPw] = useState("");
   const [pwInput, setPwInput] = useState("");
   const [pwError, setPwError] = useState("");
   const [entrantInput, setEntrantInput] = useState("");
@@ -133,50 +158,70 @@ export default function App() {
   const [saveError, setSaveError] = useState("");
   const [newPw, setNewPw] = useState("");
 
+  // Whoever is using the site: the admin, or a player with the players' password.
+  const auth = adminAuth || (playerPw ? { role: "player", password: playerPw } : null);
+  const authKey = adminAuth ? "admin" : playerPw ? "player:" + playerPw : "none";
+
   useEffect(() => {
+    let cancelled = false;
     (async () => {
+      setLoading(true);
       try {
-        let d;
-        try {
-          const res = await storageGet(STORAGE_KEY);
-          d = res ? JSON.parse(res.value) : emptyData();
-        } catch {
-          d = emptyData();
-        }
+        const res = await storageGet(STORAGE_KEY, auth);
+        const d = res ? JSON.parse(res.value) : emptyData();
         // fill in any missing tournaments
         TOURNAMENT_NAMES.forEach((n) => {
           if (!d[n]) d[n] = emptyTournament();
         });
+        if (cancelled) return;
+        setNeedPassword(false);
         setData(d);
+        setSaveError("");
       } catch (e) {
-        setData(emptyData());
+        if (cancelled) return;
+        if (e.needPassword) {
+          // A remembered password that no longer works (the admin changed it) is forgotten.
+          if (playerPw && !adminAuth) {
+            rememberPlayerPw("");
+            setPlayerPw("");
+          }
+          setNeedPassword(true);
+          setData(null);
+        } else {
+          setSaveError("Could not load the competitions — check your connection and refresh the page.");
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authKey]);
 
-  const persist = useCallback(async (next) => {
-    setData(next);
-    try {
-      const ok = await storageSet(STORAGE_KEY, JSON.stringify(next));
-      if (!ok) setSaveError("Could not save — changes may be lost.");
-      else setSaveError("");
-    } catch {
-      setSaveError("Could not save — changes may be lost.");
-    }
-  }, []);
+  useEffect(() => {
+    if (!adminAuth) return;
+    adminInfo(adminAuth).then((r) => setPlayersPwSet(r.ok ? !!r.playersPasswordSet : null));
+  }, [adminAuth]);
+
+  const persist = useCallback(
+    async (next) => {
+      setData(next);
+      const r = await storageSet(STORAGE_KEY, JSON.stringify(next), auth);
+      if (r.ok) setSaveError("");
+      else if (r.status === 401) setSaveError("Your password has changed — refresh the page and sign in again.");
+      else if (r.status === 403) setSaveError("Only the admin can change entrants, draws or dates.");
+      else setSaveError("Could not save — changes may be lost.");
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [authKey]
+  );
 
   const checkPassword = async () => {
-    let storedPw = DEFAULT_PASSWORD;
-    try {
-      const res = await storageGet(PW_KEY);
-      if (res) storedPw = res.value;
-    } catch {
-      // key not set yet, use default
-    }
-    if (pwInput === storedPw) {
-      setIsAdmin(true);
+    const tryAuth = { role: "admin", password: pwInput };
+    if (await login(tryAuth)) {
+      setAdminAuth(tryAuth);
       setPwError("");
       setPwInput("");
     } else {
@@ -184,13 +229,53 @@ export default function App() {
     }
   };
 
+  const playerSignIn = async () => {
+    const pw = playerInput.trim();
+    if (!pw) return;
+    if (await login({ role: "player", password: pw })) {
+      rememberPlayerPw(pw);
+      setPlayerPw(pw);
+      setPlayerInput("");
+      setPlayerError("");
+    } else {
+      setPlayerError("Incorrect password.");
+    }
+  };
+
+  const playerSignOut = () => {
+    if (!window.confirm("Sign out on this device? You'll need the players' password to get back in.")) return;
+    rememberPlayerPw("");
+    setPlayerPw("");
+    setView("home");
+  };
+
   const changePassword = async () => {
-    if (!newPw.trim()) return;
-    try {
-      await storageSet(PW_KEY, newPw.trim());
+    const pw = newPw.trim();
+    if (pw.length < 4) {
+      alert("The password must be at least 4 characters.");
+      return;
+    }
+    if (await setPassword(adminAuth, "admin", pw)) {
+      setAdminAuth({ role: "admin", password: pw });
       setNewPw("");
-    } catch {
-      setSaveError("Could not change password.");
+      alert("Admin password changed.");
+    } else {
+      alert("Could not change the admin password.");
+    }
+  };
+
+  const changePlayersPassword = async () => {
+    const pw = newPlayersPw.trim();
+    if (pw.length < 4) {
+      alert("The players' password must be at least 4 characters.");
+      return;
+    }
+    if (await setPassword(adminAuth, "players", pw)) {
+      setPlayersPwSet(true);
+      setNewPlayersPw("");
+      alert("Players' password saved. Give it to the players — everyone will need it to see the draws and enter results.");
+    } else {
+      alert("Could not save the players' password.");
     }
   };
 
@@ -275,7 +360,7 @@ export default function App() {
     setShowResetBox(false);
   };
 
-  if (loading) {
+  if (loading && !data && !needPassword) {
     return (
       <div style={styles.loadingScreen}>
         <div style={styles.loadingText}>Loading WHBL Comps…</div>
@@ -293,19 +378,31 @@ export default function App() {
             <div style={styles.title}>Welwyn Hatfield Bowls League</div>
             <div style={styles.subtitle}>Knockout Competitions</div>
           </div>
-          <button
-            style={styles.adminToggle}
-            onClick={() => {
-              if (isAdmin) {
-                setIsAdmin(false);
-                setView("home");
-              } else {
-                setView("adminlogin");
-              }
-            }}
-          >
-            {isAdmin ? "Exit admin" : "Admin"}
-          </button>
+          <div style={styles.headerActions}>
+            {!isAdmin && playerPw && !needPassword && (
+              <button
+                style={styles.signOutBtn}
+                title="Sign out on this device — the players' password will be asked for next time"
+                onClick={playerSignOut}
+              >
+                ✕ Sign out
+              </button>
+            )}
+            <button
+              style={styles.adminToggle}
+              onClick={() => {
+                if (isAdmin) {
+                  setAdminAuth(null);
+                  setPlayersPwSet(null);
+                  setView("home");
+                } else {
+                  setView("adminlogin");
+                }
+              }}
+            >
+              {isAdmin ? "Exit admin" : "Admin"}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -332,7 +429,42 @@ export default function App() {
         </div>
       )}
 
-      {(view === "home" || (view === "adminlogin" && isAdmin)) && (
+      {needPassword && !isAdmin && view !== "adminlogin" && (
+        <div style={styles.centerBox}>
+          <div style={styles.card}>
+            <div style={styles.cardTitle}>Players' sign-in</div>
+            <div style={{ fontSize: 14, color: "#5d584a", marginBottom: 10 }}>
+              Enter the players' password to see the draws and enter your results. You'll only need to do this once on this
+              phone or computer.
+            </div>
+            <input
+              type="password"
+              value={playerInput}
+              onChange={(e) => setPlayerInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && playerSignIn()}
+              placeholder="Players' password"
+              style={styles.input}
+              autoFocus
+            />
+            {playerError && <div style={styles.errText}>{playerError}</div>}
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button style={styles.btnPrimary} onClick={playerSignIn}>Sign in</button>
+            </div>
+            <div style={{ fontSize: 13, color: "#7a7462", marginTop: 12 }}>
+              Don't know it? Ask your club or the league secretary.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isAdmin && playersPwSet === false && (
+        <div style={styles.warnBanner}>
+          No players' password is set yet, so anyone with the link can see the draws and enter results. Open any
+          competition and set one under <b>Players' password</b>.
+        </div>
+      )}
+
+      {data && (view === "home" || (view === "adminlogin" && isAdmin)) && (
         <main style={styles.grid}>
           {TOURNAMENT_NAMES.map((name) => {
             const t = data[name];
@@ -354,7 +486,7 @@ export default function App() {
         </main>
       )}
 
-      {view === "tournament" && selected && (
+      {data && view === "tournament" && selected && (
         <main style={styles.tournamentView}>
           <button style={styles.backLink} onClick={() => setView("home")}>← All competitions</button>
           <h2 style={styles.tHeading}>{selected}</h2>
@@ -421,6 +553,24 @@ export default function App() {
               </div>
 
               <div style={{ marginTop: 20, borderTop: "1px solid #d8cfb8", paddingTop: 16 }}>
+                <div style={styles.cardTitle}>Players' password</div>
+                <div style={{ fontSize: 13, color: "#5d584a", marginBottom: 8 }}>
+                  {playersPwSet
+                    ? "A players' password is set. Players type it once on each phone or computer. Entering a new one replaces it, and everyone will be asked for the new one."
+                    : "Not set yet — anyone with the link can see the draws and enter results. Set one and give it to the players."}
+                </div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+                  <input
+                    style={styles.input}
+                    type="text"
+                    autoComplete="off"
+                    value={newPlayersPw}
+                    onChange={(e) => setNewPlayersPw(e.target.value)}
+                    placeholder={playersPwSet ? "New players' password" : "Players' password (4+ characters)"}
+                    aria-label="Players' password"
+                  />
+                  <button style={styles.btnPrimary} onClick={changePlayersPassword}>{playersPwSet ? "Change" : "Set"}</button>
+                </div>
                 <div style={styles.cardTitle}>Change admin password</div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <input
@@ -819,6 +969,9 @@ const fontCss = `
 `;
 
 const styles = {
+  headerActions: { marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" },
+  signOutBtn: { background: "transparent", color: "#FFFDF7", border: "2px solid #FFFDF7", padding: "7px 13px", borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: "pointer" },
+  warnBanner: { background: "#FFF4D6", border: "1px solid #E2C46B", color: "#5c4710", padding: "10px 16px", fontSize: 14, maxWidth: 1100, margin: "12px auto 0", borderRadius: 6 },
   phoneBox: { background: "#FFFDF7", border: "1px solid #e2d9c2", borderRadius: 10, padding: "12px 12px 16px" },
   phoneTabs: { display: "flex", gap: 6, overflowX: "auto", margin: "0 -12px 12px", padding: "0 12px 4px", scrollbarWidth: "none" },
   phoneTab: { flex: "0 0 auto", padding: "8px 12px", border: "1px solid #cfc4a3", borderRadius: 999, background: "#fff", color: "#17392A", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
