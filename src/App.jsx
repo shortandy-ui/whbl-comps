@@ -520,7 +520,108 @@ function renderRoundDates(meta, roundIdx, isAdmin, onUpdateMeta, extraStyle) {
   );
 }
 
+// ---------- Phone view: one round at a time ----------
+
+// True on a phone-sized screen, where the whole draw is too wide to see.
+function useIsPhone() {
+  const query = "(max-width: 700px)";
+  const [phone, setPhone] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia ? window.matchMedia(query).matches : false
+  );
+  useEffect(() => {
+    if (!window.matchMedia) return undefined;
+    const mq = window.matchMedia(query);
+    const onChange = (e) => setPhone(e.matches);
+    if (mq.addEventListener) mq.addEventListener("change", onChange);
+    else mq.addListener(onChange);
+    setPhone(mq.matches);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener("change", onChange);
+      else mq.removeListener(onChange);
+    };
+  }, []);
+  return phone;
+}
+
+// The round being played now: the first one with a match that has both players but no result.
+function currentRoundIdx(rounds) {
+  for (let ri = 0; ri < rounds.length; ri++) {
+    if (rounds[ri].some((m) => m.p1 && m.p2 && !m.winner)) return ri;
+  }
+  return rounds.length - 1;
+}
+
+function PhoneBracket({ rounds, roundMeta, isAdmin, onSubmitScore, onUpdateMeta }) {
+  const total = rounds.length;
+  const [picked, setPicked] = useState(null);
+  const ri = picked === null || picked >= total ? currentRoundIdx(rounds) : picked;
+  const tabsRef = useRef(null);
+
+  // Keep the chosen tab in view (the tab row scrolls sideways on narrow phones).
+  useEffect(() => {
+    const row = tabsRef.current;
+    const tab = row && row.querySelector('[data-on="1"]');
+    if (tab) row.scrollLeft = tab.offsetLeft - (row.clientWidth - tab.offsetWidth) / 2;
+  }, [ri]);
+
+  const isBye = (m) => ri === 0 && !!m.p1 !== !!m.p2;
+  const games = rounds[ri].map((m, i) => ({ m, i })).filter(({ m }) => !isBye(m));
+  const byes = rounds[ri].filter(isBye).map((m) => m.p1 || m.p2);
+  const finalMatch = rounds[total - 1][0];
+
+  return (
+    <div style={styles.phoneBox}>
+      <div ref={tabsRef} style={styles.phoneTabs} role="tablist" aria-label="Rounds">
+        {rounds.map((_, i) => (
+          <button
+            key={i}
+            role="tab"
+            aria-selected={i === ri}
+            data-on={i === ri ? "1" : "0"}
+            style={i === ri ? { ...styles.phoneTab, ...styles.phoneTabOn } : styles.phoneTab}
+            onClick={() => setPicked(i)}
+          >
+            {roundName(i, total)}
+          </button>
+        ))}
+      </div>
+      <div style={styles.roundLabel}>{roundName(ri, total)}</div>
+      {renderRoundDates(roundMeta[ri], ri, isAdmin, onUpdateMeta, { marginBottom: 12 })}
+      <div style={styles.phoneList}>
+        {games.length ? (
+          games.map(({ m, i }) => (
+            <MatchCard
+              key={ri + "-" + i}
+              match={m}
+              firstRound={ri === 0}
+              onSubmit={(s1, s2) => onSubmitScore(ri, i, s1, s2)}
+            />
+          ))
+        ) : (
+          <div style={styles.phoneNote}>No matches in this round yet.</div>
+        )}
+      </div>
+      {byes.length > 0 && (
+        <div style={styles.phoneNote}>
+          <b>Byes to the next round:</b> {byes.join(", ")}
+        </div>
+      )}
+      {ri === total - 1 && (
+        <div style={{ ...styles.champBox, marginTop: 14 }}>
+          {finalMatch.winner ? <>🏆 {finalMatch.winner}</> : "TBD"}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Bracket({ rounds, roundMeta, isAdmin, onSubmitScore, onUpdateMeta }) {
+  const isPhone = useIsPhone();
+  if (isPhone) {
+    return (
+      <PhoneBracket rounds={rounds} roundMeta={roundMeta} isAdmin={isAdmin} onSubmitScore={onSubmitScore} onUpdateMeta={onUpdateMeta} />
+    );
+  }
   const totalRounds = rounds.length;
   const { leftCols, rightCols, finalMatch } = buildSides(rounds);
 
@@ -718,6 +819,12 @@ const fontCss = `
 `;
 
 const styles = {
+  phoneBox: { background: "#FFFDF7", border: "1px solid #e2d9c2", borderRadius: 10, padding: "12px 12px 16px" },
+  phoneTabs: { display: "flex", gap: 6, overflowX: "auto", margin: "0 -12px 12px", padding: "0 12px 4px", scrollbarWidth: "none" },
+  phoneTab: { flex: "0 0 auto", padding: "8px 12px", border: "1px solid #cfc4a3", borderRadius: 999, background: "#fff", color: "#17392A", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
+  phoneTabOn: { background: "#17392A", borderColor: "#17392A", color: "#FFFDF7" },
+  phoneList: { display: "flex", flexDirection: "column", gap: 10 },
+  phoneNote: { marginTop: 10, fontSize: 14, color: "#7a7462" },
   app: {
     minHeight: "100vh",
     background: "#F5EFDD",
