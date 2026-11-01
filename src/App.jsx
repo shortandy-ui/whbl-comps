@@ -89,7 +89,7 @@ function generateBracket(entrants) {
     });
   }
 
-  const roundMeta = rounds.map(() => ({ playBy: "", contact: "" }));
+  const roundMeta = rounds.map(() => ({ contactBy: "", playBy: "" }));
   return { rounds, roundMeta };
 }
 
@@ -476,6 +476,50 @@ function buildSides(rounds) {
   return { leftCols, rightCols, finalMatch: rounds[totalRounds - 1][0] };
 }
 
+// "Mon 10 May" from "2027-05-10" (falls back to the text as stored).
+function niceDate(iso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || "")) return iso || "";
+  return new Date(iso + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+}
+
+// A round's "Contact by" and "Play by" dates: date boxes for the admin, plain text for everyone else.
+function renderRoundDates(meta, roundIdx, isAdmin, onUpdateMeta, extraStyle) {
+  const m = meta || {};
+  if (isAdmin) {
+    return (
+      <div style={{ ...styles.roundDates, ...extraStyle }}>
+        <label style={styles.dateLabel}>
+          Contact by
+          <input
+            type="date"
+            style={styles.dateInput}
+            value={m.contactBy || ""}
+            onChange={(e) => onUpdateMeta(roundIdx, "contactBy", e.target.value)}
+          />
+        </label>
+        <label style={styles.dateLabel}>
+          Play by
+          <input
+            type="date"
+            style={styles.dateInput}
+            value={m.playBy || ""}
+            onChange={(e) => onUpdateMeta(roundIdx, "playBy", e.target.value)}
+          />
+        </label>
+      </div>
+    );
+  }
+  if (!m.contactBy && !m.playBy) return <div style={{ ...styles.roundDates, ...extraStyle }} />;
+  return (
+    <div style={{ ...styles.roundDates, ...extraStyle }}>
+      <div style={styles.dateReadout}>
+        {m.contactBy && <div>Contact by <b>{niceDate(m.contactBy)}</b></div>}
+        {m.playBy && <div>Play by <b>{niceDate(m.playBy)}</b></div>}
+      </div>
+    </div>
+  );
+}
+
 function Bracket({ rounds, roundMeta, isAdmin, onSubmitScore, onUpdateMeta }) {
   const totalRounds = rounds.length;
   const { leftCols, rightCols, finalMatch } = buildSides(rounds);
@@ -483,38 +527,7 @@ function Bracket({ rounds, roundMeta, isAdmin, onSubmitScore, onUpdateMeta }) {
   const RoundColumn = ({ roundIdx, items, editableDates, side }) => (
     <div style={styles.roundCol}>
       <div style={styles.roundLabel}>{roundName(roundIdx, totalRounds)}</div>
-      <div style={styles.roundDates}>
-        {editableDates && isAdmin ? (
-          <>
-            <label style={styles.dateLabel}>
-              Play by
-              <input
-                type="date"
-                style={styles.dateInput}
-                value={roundMeta[roundIdx].playBy}
-                onChange={(e) => onUpdateMeta(roundIdx, "playBy", e.target.value)}
-              />
-            </label>
-            <label style={styles.dateLabel}>
-              Contact
-              <input
-                type="text"
-                style={styles.dateInput}
-                value={roundMeta[roundIdx].contact}
-                onChange={(e) => onUpdateMeta(roundIdx, "contact", e.target.value)}
-                placeholder="Contact name"
-              />
-            </label>
-          </>
-        ) : (
-          (roundMeta[roundIdx].playBy || roundMeta[roundIdx].contact) && (
-            <div style={styles.dateReadout}>
-              {roundMeta[roundIdx].playBy && <div>Play by {roundMeta[roundIdx].playBy}</div>}
-              {roundMeta[roundIdx].contact && <div>Contact: {roundMeta[roundIdx].contact}</div>}
-            </div>
-          )
-        )}
-      </div>
+      {renderRoundDates(roundMeta[roundIdx], roundIdx, editableDates && isAdmin, onUpdateMeta, null)}
       <div className={side === "left" ? "whbl-col-left" : "whbl-col-right"} style={{ ...styles.matchesCol, justifyContent: "space-around" }}>
         {items.map(({ match, matchIdx }) => (
           <MatchCard
@@ -534,6 +547,7 @@ function Bracket({ rounds, roundMeta, isAdmin, onSubmitScore, onUpdateMeta }) {
         <div style={{ ...styles.bracketRow, justifyContent: "center" }}>
           <div style={styles.roundCol}>
             <div style={styles.roundLabel}>Final</div>
+            {renderRoundDates(roundMeta[0], 0, isAdmin, onUpdateMeta, { marginBottom: 8 })}
             <MatchCard match={finalMatch} onSubmit={(s1, s2) => onSubmitScore(0, 0, s1, s2)} />
             <div style={styles.champBox}>
               {finalMatch.winner ? <>🏆 {finalMatch.winner}</> : "TBD"}
@@ -552,6 +566,7 @@ function Bracket({ rounds, roundMeta, isAdmin, onSubmitScore, onUpdateMeta }) {
         ))}
         <div className="whbl-final-col" style={styles.finalCol}>
           <div style={styles.roundLabel}>Final</div>
+          {renderRoundDates(roundMeta[totalRounds - 1], totalRounds - 1, isAdmin, onUpdateMeta, { marginBottom: 8 })}
           <MatchCard
             match={finalMatch}
             onSubmit={(s1, s2) => onSubmitScore(totalRounds - 1, 0, s1, s2)}
