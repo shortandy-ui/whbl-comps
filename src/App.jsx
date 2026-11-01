@@ -884,7 +884,7 @@ function PlayerRow({ name, won, trophy, score }) {
     <div
       style={{
         ...styles.playerRow,
-        fontWeight: won ? 700 : 400,
+        fontWeight: 700, // all names bold; the winner also gets the gold line
         color: won ? "#17392A" : "#3a362c",
         borderBottom: won ? "2px solid #AC8347" : "2px solid transparent",
       }}
