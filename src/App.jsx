@@ -906,6 +906,131 @@ function MatchCard({ match, onSubmit, firstRound = false }) {
   );
 }
 
+// ---------- Team names: "Ann Smith +3" ----------
+// A pair, triple or four is stored as one name, e.g. "Ann Smith & Bob Jones & Cath Lee".
+// The draw shows the first player (the contact) and a "+N" badge; tapping or clicking
+// the name lists the whole team, and on a computer hovering does the same.
+
+function teamMembers(name) {
+  const text = String(name || "").trim();
+  const parts = text.split(/\s*&\s*|\s*,\s*|\s*\/\s*|\s+and\s+/i).map((s) => s.trim()).filter(Boolean);
+  return parts.length > 1 ? parts : [text];
+}
+
+const canHover = () => typeof window !== "undefined" && !!window.matchMedia && window.matchMedia("(hover: hover)").matches;
+
+function TeamName({ name }) {
+  const members = teamMembers(name);
+  const [pos, setPos] = useState(null);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!pos) return undefined;
+    const outside = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setPos(null);
+    };
+    const close = () => setPos(null);
+    const onKey = (e) => e.key === "Escape" && setPos(null);
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [pos]);
+
+  if (members.length < 2) return <>{name}</>;
+
+  const show = () => {
+    const r = ref.current.getBoundingClientRect();
+    const height = 34 + members.length * 22;
+    const width = 220;
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+    const below = r.bottom + 6 + height < window.innerHeight;
+    setPos({ left, top: below ? r.bottom + 6 : Math.max(8, r.top - height - 6) });
+  };
+  const toggle = () => (pos ? setPos(null) : show());
+
+  return (
+    <span
+      ref={ref}
+      role="button"
+      tabIndex={0}
+      aria-expanded={!!pos}
+      aria-label={`${name}. Show the team`}
+      style={teamStyles.wrap}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (canHover()) show();
+        else toggle();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggle();
+        }
+      }}
+      onMouseEnter={() => canHover() && show()}
+      onMouseLeave={() => canHover() && setPos(null)}
+    >
+      {members[0]}
+      <span style={teamStyles.badge} aria-hidden="true">+{members.length - 1}</span>
+      {pos && (
+        <span role="tooltip" style={{ ...teamStyles.pop, left: pos.left, top: pos.top }}>
+          <span style={teamStyles.popTitle}>Team</span>
+          {members.map((m, i) => (
+            <span key={i} style={teamStyles.popRow}>
+              {m}
+            </span>
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
+
+const teamStyles = {
+  wrap: { cursor: "pointer", borderBottom: "1px dotted #AC8347" },
+  badge: {
+    display: "inline-block",
+    marginLeft: 6,
+    padding: "0 6px",
+    borderRadius: 9,
+    background: "#AC8347",
+    color: "#FFFDF7",
+    fontSize: 11,
+    fontWeight: 700,
+    lineHeight: "17px",
+    verticalAlign: "1px",
+  },
+  pop: {
+    position: "fixed",
+    zIndex: 1000,
+    width: 220,
+    boxSizing: "border-box",
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    padding: "8px 12px 10px",
+    background: "#FFFDF7",
+    color: "#17392A",
+    border: "1px solid #AC8347",
+    borderRadius: 8,
+    boxShadow: "0 6px 18px rgba(23,57,42,0.18)",
+    fontSize: 14,
+    fontWeight: 600,
+    lineHeight: "20px",
+    textAlign: "left",
+    cursor: "default",
+  },
+  popTitle: { fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "#8a6a1f" },
+  popRow: { display: "block" },
+};
+
 function PlayerRow({ name, won, trophy, score }) {
   return (
     <div
@@ -916,7 +1041,7 @@ function PlayerRow({ name, won, trophy, score }) {
         borderBottom: won ? "2px solid #AC8347" : "2px solid transparent",
       }}
     >
-      <span>{won && trophy ? "🏆 " : ""}{name || "—"}</span>
+      <span>{won && trophy ? "🏆 " : ""}{name ? <TeamName name={name} /> : "—"}</span>
       {name && score !== "" && score != null && <span style={styles.scoreDigit}>{score}</span>}
     </div>
   );
